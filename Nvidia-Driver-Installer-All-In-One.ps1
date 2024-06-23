@@ -1,4 +1,4 @@
-﻿# https://github.com/lord-carlos/nvidia-update/blob/master/nvidia.ps1
+# https://github.com/lord-carlos/nvidia-update/blob/master/nvidia.ps1
 # https://github.com/farag2/NVidia-Driver-Update/blob/main/UpdateNVidiaDriver.ps1
 
 # TODO
@@ -67,6 +67,7 @@ function cleanUp {
     Remove-Item -Path 'HKLM:\Software\AlreadyMetered' -Force -ErrorAction SilentlyContinue
     Remove-Item -Path 'HKLM:\Software\RebootDummyKey' -Force -ErrorAction SilentlyContinue
     Remove-Item -Path 'HKLM:\Software\TempDisableDriverUpdates' -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path 'HKCU:\Software\nvidiadisplaycontainermsgbox' -Force -ErrorAction SilentlyContinue
 
     # Define the registry key path
     $registryPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
@@ -521,7 +522,7 @@ $checkBootMode = (Get-CimInstance win32_computersystem -Property BootupState).Bo
 if ($checkBootMode -like "*Normal boot*") {
     Write-Verbose "We are in a normal boot environment" -Verbose
     if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
-        # Download the nvidia driver first, if successfull we will start cleaning the current driver with DDU
+        # Download and extract the nvidia driver first, if successfull we will start cleaning the current driver with DDU
         if (Test-Path -Path $tempNvidiaFolder) {
             Remove-item "$tempNvidiaFolder" -Recurse -Force
         }
@@ -530,48 +531,6 @@ if ($checkBootMode -like "*Normal boot*") {
         }
         Write-Verbose "Downloading now the latest nvidia driver" -Verbose
         downloadNvidiaDriver
-        Write-Verbose "`We will restart your system in safe mode and clean your nvidia driver with DDU.`nDo you want to continue?" -Verbose
-        $confirmation = Read-Host "(Y/N) Default is no"
-        if ($confirmation -eq 'y') {
-            DisableAutoDriverUpdate
-            # Create a runonce key in the registry to run the script automatically when you restart in safe mode.
-            # By default, these keys are ignored when the computer is started in Safe Mode. The value name of RunOnce keys can be prefixed with an asterisk (*) to force the program to run even in Safe mode.
-            New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "*RebootSafeMode*" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-            # Reboot to safe mode with networking
-            Start-Process "$env:SystemRoot\System32\cmd.exe"-ArgumentList '/s,/c,bcdedit /set {current} safeboot network & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
-            exit
-        }
-        else {
-            cleanUp
-            Write-Host "Bye Bye (-;"
-            Write-Host "Press any key to exit..."
-            $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            exit
-        }
-    }
-}
-
-if ($checkBootMode -like "*Fail-safe*") {
-    Write-Verbose "We are in a safe boot environment" -Verbose
-    # Driver uninstall with DDU, only if the system is in safe boot
-    if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
-        Write-Verbose "DDU Driver Uninstaller now running" -Verbose
-        Start-Process -FilePath "$DDU" -ArgumentList {"-silent", "-cleannvidia", "-RemovePhysx", "-RemoveGFE", "-RemoveNVBROADCAST", "-RemoveNVCP"} -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
-        # Create a dummy registry key needed to continue the script after a reboot.
-        New-Item 'HKLM:\Software\RebootDummyKey' -Force
-        # Create a runonce key in the registry to run the script automatically after rebooting to normal boot.
-        New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "RebootNormalMode" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-        # Reboot to normal mode
-        Start-Process "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/s,/c,bcdedit /deletevalue {current} safeboot & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
-        exit
-    }
-}
-
-if ($checkBootMode -like "*Normal boot*") {
-    # Download and install nvidia driver
-    if ((Test-Path 'HKLM:\Software\RebootDummyKey')) {
-        Write-Verbose "Starting Nvidia install script" -Verbose
-        Remove-Item -Path "HKLM:\Software\RebootDummyKey" -Force
 
         get7Zip
 
@@ -623,6 +582,49 @@ if ($checkBootMode -like "*Normal boot*") {
         } else {
             Write-Warning "Could not find the nvidia setup.cfg" -Verbose
         }
+
+        Write-Verbose "`We will restart your system in safe mode and clean your nvidia driver with DDU.`nDo you want to continue?" -Verbose
+        $confirmation = Read-Host "(Y/N) Default is no"
+        if ($confirmation -eq 'y') {
+            DisableAutoDriverUpdate
+            # Create a runonce key in the registry to run the script automatically when you restart in safe mode.
+            # By default, these keys are ignored when the computer is started in Safe Mode. The value name of RunOnce keys can be prefixed with an asterisk (*) to force the program to run even in Safe mode.
+            New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "*RebootSafeMode*" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+            # Reboot to safe mode with networking
+            Start-Process "$env:SystemRoot\System32\cmd.exe"-ArgumentList '/s,/c,bcdedit /set {current} safeboot network & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
+            exit
+        }
+        else {
+            cleanUp
+            Write-Host "Bye Bye (-;"
+            Write-Host "Press any key to exit..."
+            $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            exit
+        }
+    }
+}
+
+if ($checkBootMode -like "*Fail-safe*") {
+    Write-Verbose "We are in a safe boot environment" -Verbose
+    # Driver uninstall with DDU, only if the system is in safe boot
+    if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
+        Write-Verbose "DDU Driver Uninstaller now running" -Verbose
+        Start-Process -FilePath "$DDU" -ArgumentList {"-silent", "-cleannvidia", "-RemovePhysx", "-RemoveGFE", "-RemoveNVBROADCAST", "-RemoveNVCP"} -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        # Create a dummy registry key needed to continue the script after a reboot.
+        New-Item 'HKLM:\Software\RebootDummyKey' -Force
+        # Create a runonce key in the registry to run the script automatically after rebooting to normal boot.
+        New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "RebootNormalMode" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        # Reboot to normal mode
+        Start-Process "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/s,/c,bcdedit /deletevalue {current} safeboot & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
+        exit
+    }
+}
+
+if ($checkBootMode -like "*Normal boot*") {
+    # Download and install nvidia driver
+    if ((Test-Path 'HKLM:\Software\RebootDummyKey')) {
+        Write-Verbose "Starting Nvidia install script" -Verbose
+        Remove-Item -Path "HKLM:\Software\RebootDummyKey" -Force
 
         # Installing drivers
         Write-Verbose "Installing the nvidia driver" -Verbose
