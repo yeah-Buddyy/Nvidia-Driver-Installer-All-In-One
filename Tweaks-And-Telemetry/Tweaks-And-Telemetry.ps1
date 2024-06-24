@@ -147,8 +147,24 @@ if (Test-Path -Path "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCo
     rundll32.exe "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCore\NVI2.DLL",UninstallPackage NvTelemetry
 }
 
-# Set Disable NVIDIA-Display-Container to Context Menu
+# Set Enable/Disable NVIDIA-Display-Container to Context Menu
 Set-Content "$env:ProgramData\Enable-NVIDIA-Display-Container.ps1" @'
+    # .Net methods for hiding/showing the console in the background
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+    '
+    function Hide-Console
+    {
+        $consolePtr = [Console.Window]::GetConsoleWindow()
+        #0 hide
+        [Console.Window]::ShowWindow($consolePtr, 0)
+    }
+    Hide-Console
+
     # Run as Admin
     if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
@@ -162,6 +178,22 @@ Set-Content "$env:ProgramData\Enable-NVIDIA-Display-Container.ps1" @'
 '@
 
 Set-Content "$env:ProgramData\Disable-NVIDIA-Display-Container.ps1" @'
+    # .Net methods for hiding/showing the console in the background
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+    '
+    function Hide-Console
+    {
+        $consolePtr = [Console.Window]::GetConsoleWindow()
+        #0 hide
+        [Console.Window]::ShowWindow($consolePtr, 0)
+    }
+    Hide-Console
+
     # Run as Admin
     if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
@@ -196,15 +228,35 @@ Set-Content "$env:ProgramData\Disable-NVIDIA-Display-Container.ps1" @'
     }
 
     Write-Verbose -Message "Disable NVIDIA Display Container Service" -Verbose
-    Get-Service -ServiceName "NVDisplay.ContainerLocalSystem" | Stop-Service | Set-Service -StartupType Disabled -Erroraction SilentlyContinue
+    Get-Service -ServiceName "NVDisplay.ContainerLocalSystem" | Stop-Service -Force | Set-Service -StartupType Disabled -Erroraction SilentlyContinue
 
     exit
 '@
 
-if (Test-Path -Path "$env:ProgramData\Enable-NVIDIA-Display-Container.ps1") {
-    if (Test-Path -Path "$env:ProgramData\Disable-NVIDIA-Display-Container.ps1") {
+if (Test-Path -Path "$env:ProgramData\Enable-NVIDIA-Display-Container.ps1" -PathType Leaf) {
+    if (Test-Path -Path "$env:ProgramData\Disable-NVIDIA-Display-Container.ps1" -PathType Leaf) {
+        if (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer") {
+            Remove-Item "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer" -Force -Recurse
+        }
         if (-not (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer")) {
             New-Item -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer" -Force
+        }
+        if (-not (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer001")) {
+            New-Item -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer001" -Force
+        }
+        if (-not (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer001\command")) {
+            New-Item -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer001\command" -Force
+        }
+        if (-not (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer002")) {
+            New-Item -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer002" -Force
+        }
+        if (-not (Test-Path -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer002\command")) {
+            New-Item -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\shell\NVIDIAContainer\shell\NVIDIAContainer002\command" -Force
+        }
+        Remove-Item -Path 'HKCU:\Software\nvidiadisplaycontainermsgbox' -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path "$PSScriptRoot\Tweaks-And-Telemetry\Nvidia.ico" -Destination "$env:ProgramData\Nvidia.ico" -Force
+        if (Test-Path -Path "$env:ProgramData\Nvidia.ico" -PathType Leaf) {
+            New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\Shell\NVIDIAContainer" -Force -Name "Icon" -PropertyType "String" -Value `"$env:ProgramData\Nvidia.ico`"
         }
         New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\Shell\NVIDIAContainer" -Force -Name "MUIVerb" -PropertyType "String" -Value "NVIDIA Container"
         New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\DesktopBackground\Shell\NVIDIAContainer" -Force -Name "Position" -PropertyType "String" -Value "Bottom"
