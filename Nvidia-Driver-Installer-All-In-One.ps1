@@ -67,7 +67,6 @@ function cleanUp {
     Remove-Item -Path 'HKLM:\Software\AlreadyMetered' -Force -ErrorAction SilentlyContinue
     Remove-Item -Path 'HKLM:\Software\RebootDummyKey' -Force -ErrorAction SilentlyContinue
     Remove-Item -Path 'HKLM:\Software\TempDisableDriverUpdates' -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path 'HKCU:\Software\nvidiadisplaycontainermsgbox' -Force -ErrorAction SilentlyContinue
 
     # Define the registry key path
     $registryPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
@@ -201,6 +200,34 @@ function Download-File {
         if ($fileStream) { $fileStream.Close() }
     }
 }
+
+<#
+function Test-WebsiteConnection {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Website
+    )
+
+    try {
+        # Test if the website is reachable
+        $result = Test-Connection -ComputerName $Website -Count 1 -ErrorAction Stop
+
+        # If Test-Connection succeeds, return success message
+        if ($result) {
+            Write-Verbose "`n$Website is reachable." -Verbose
+        } else {
+            Write-Verbose "`n$Website is not reachable." -Verbose
+            Write-Host "Press any key to exit..."
+		    $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        }
+    } catch {
+        # If Test-Connection fails (e.g., timeout, DNS resolution issue), catch the exception
+        Write-Error "`nFailed to connect to $Website. Error: $_"
+        Write-Host "Press any key to exit..."
+		$host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    }
+}
+#>
 
 $global:archiverProgram = ""
 function get7Zip {
