@@ -201,34 +201,6 @@ function Download-File {
     }
 }
 
-<#
-function Test-WebsiteConnection {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Website
-    )
-
-    try {
-        # Test if the website is reachable
-        $result = Test-Connection -ComputerName $Website -Count 1 -ErrorAction Stop
-
-        # If Test-Connection succeeds, return success message
-        if ($result) {
-            Write-Verbose "`n$Website is reachable." -Verbose
-        } else {
-            Write-Verbose "`n$Website is not reachable." -Verbose
-            Write-Host "Press any key to exit..."
-		    $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        }
-    } catch {
-        # If Test-Connection fails (e.g., timeout, DNS resolution issue), catch the exception
-        Write-Error "`nFailed to connect to $Website. Error: $_"
-        Write-Host "Press any key to exit..."
-		$host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-    }
-}
-#>
-
 $global:archiverProgram = ""
 function get7Zip {
     # Get the latest 7-Zip, if not already installed
@@ -517,8 +489,10 @@ function downloadNvidiaDriver {
 
 # Check if we are in normal boot or in safe boot
 $checkBootMode = (Get-CimInstance win32_computersystem -Property BootupState).BootupState
+$isNormalBoot = $checkBootMode -like "*Normal boot*"
+$isFailSafeBoot = $checkBootMode -like "*Fail-safe*"
 
-if ($checkBootMode -like "*Normal boot*") {
+if ($isNormalBoot) {
     Write-Verbose "We are in a normal boot environment" -Verbose
     if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
         # Download and extract the nvidia driver first, if successfull we will start cleaning the current driver with DDU
@@ -603,7 +577,7 @@ if ($checkBootMode -like "*Normal boot*") {
     }
 }
 
-if ($checkBootMode -like "*Fail-safe*") {
+if ($isFailSafeBoot) {
     Write-Verbose "We are in a safe boot environment" -Verbose
     # Driver uninstall with DDU, only if the system is in safe boot
     if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
@@ -619,7 +593,7 @@ if ($checkBootMode -like "*Fail-safe*") {
     }
 }
 
-if ($checkBootMode -like "*Normal boot*") {
+if ($isNormalBoot) {
     # Download and install nvidia driver
     if ((Test-Path 'HKLM:\Software\RebootDummyKey')) {
         Write-Verbose "Starting Nvidia install script" -Verbose
