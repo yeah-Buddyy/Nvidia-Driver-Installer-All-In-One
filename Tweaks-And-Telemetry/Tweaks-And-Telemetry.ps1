@@ -1,16 +1,18 @@
 # Run as Admin
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process PowerShell.exe -Verb RunAs "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
+    Start-Process $env:WinDir\System32\WindowsPowershell\v1.0\powershell.exe -Verb RunAs "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
     exit;
 }
 
 # enable msi mode
 Write-Verbose "enable msi mode" -Verbose
 $VideoCardID = (Get-CimInstance win32_VideoController) | Where-Object { $_.PNPDeviceID -like "PCI\VEN_*"}
+if (-Not (Test-Path -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties")) {
+    New-Item "HKLM:\SYSTEM\CurrentControlSet\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" -Force
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" -Name MSISupported -Value 1 -PropertyType DWORD -Force
+}
 if (-Not (Test-Path -Path "HKLM:\SYSTEM\ControlSet001\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties")) {
     New-Item "HKLM:\SYSTEM\ControlSet001\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" -Force
-    New-ItemProperty -Path "HKLM:\SYSTEM\ControlSet001\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" -Name MSISupported -Value 1 -PropertyType DWORD -Force
-} else {
     New-ItemProperty -Path "HKLM:\SYSTEM\ControlSet001\Enum\$($VideoCardID.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" -Name MSISupported -Value 1 -PropertyType DWORD -Force
 }
 
@@ -142,7 +144,7 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\NVIDIA Corporation\NvControlPanel2\Client
 New-ItemProperty -Path "HKLM:\SOFTWARE\NVIDIA Corporation\Global\Startup\SendTelemetryData" -Name "@" -Value "0" -PropertyType DWord -Force
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\Startup" -Name "SendTelemetryData" -Value "0" -PropertyType DWord -Force
 
-if (Test-Path -Path "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCore\NVI2.DLL") {
+if (Test-Path -Path "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCore\NVI2.DLL" -PathType Leaf) {
     rundll32.exe "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCore\NVI2.DLL",UninstallPackage NvTelemetryContainer
     rundll32.exe "$env:ProgramFiles\NVIDIA Corporation\Installer2\InstallerCore\NVI2.DLL",UninstallPackage NvTelemetry
 }
