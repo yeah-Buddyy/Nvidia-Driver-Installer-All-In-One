@@ -5,7 +5,7 @@ There are a few more extras, you just need to edit them in the script.
 # $True/$False Add a nvidia profile inspector profile
 $enableNvidiaProfileInspector = $true
 
-$NvidiaProfileInspectorProfile = "$PSScriptRoot\NvidiaBaseProfile.nip"
+$NvidiaProfileInspectorProfile = "NvidiaBaseProfile.nip"
 
 # $True/$False Disable GPU USB-C port
 $disableUsbC = $true
