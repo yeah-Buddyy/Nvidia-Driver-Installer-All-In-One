@@ -2,27 +2,21 @@
 # https://github.com/farag2/NVidia-Driver-Update/blob/main/UpdateNVidiaDriver.ps1
 
 # TODO
-# Clean code
-# Build functions for downloading needed programs automatically
 # Block nvidia telemetry ips https://github.com/W4RH4WK/Debloat-Windows-10/blob/master/scripts/block-telemetry.ps1 https://forums.guru3d.com/threads/is-nvidia-the-only-it-company-forcing-telemetry-to-its-costumers.436705/page-5#post-5887706 https://github.com/undergroundwires/privacy.sexy/blob/nvidia-308/src/application/collections/windows.yaml#L4400-L4725
-# Instead of disabling Windows driver updates to prevent Windows from automatically installing the NVIDIA driver, boot into safe mode without a network and install the NVIDIA driver from there.
 
 # Run as Admin
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process PowerShell.exe -Verb RunAs "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
+    Start-Process $env:WinDir\System32\WindowsPowershell\v1.0\powershell.exe -Verb RunAs "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`"";
     exit;
 }
 
 ### Edit here ###
-$DDU = "$PSScriptRoot\DDU v18.0.7.7\Display Driver Uninstaller.exe"
 
 # add a nvidia profile inspector profile
 $enableNvidiaProfileInspector = $true
-$NvidiaProfileInspector = "$PSScriptRoot\nvidiaProfileInspector2.4.0.4\nvidiaProfileInspector.exe"
-$NvidiaProfileInspectorProfile = "$PSScriptRoot\nvidiaProfileInspector2.4.0.4\NvidiaBaseProfile.nip"
+$NvidiaProfileInspectorProfile = "$PSScriptRoot\NvidiaBaseProfile.nip"
 
 $disableUsbC = $true
-$DevManView = "$PSScriptRoot\devmanview-x64\DevManView.exe"
 
 # https://www.reddit.com/r/ValveIndex/comments/c72pg0/discussion_and_troubleshooting_for_index_hardware/esmjkz4/
 $disableHdAudioSleepTimer = $true
@@ -33,7 +27,7 @@ $disableHdcp = $true
 # Dont show the nvidia tray icon
 $disableNvidiaTrayIcon = $true
 
-# disable nvidia telemetry and do some tweaks
+# disable nvidia telemetry and enable msi mode
 $enableTweaksandDisableTelemetry = $true
 
 # Force TLS1.2
@@ -62,11 +56,11 @@ if (-Not (Test-Path -Path $tempNvidiaFolder)) {
 }
 
 function cleanUp {
-    EnableAutoDriverUpdate
+    Write-Verbose "Cleaning up..." -Verbose
 
-    Remove-Item -Path 'HKLM:\Software\AlreadyMetered' -Force -ErrorAction SilentlyContinue
+    RestoreAutoDriverUpdate
+
     Remove-Item -Path 'HKLM:\Software\RebootDummyKey' -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path 'HKLM:\Software\TempDisableDriverUpdates' -Force -ErrorAction SilentlyContinue
 
     # Define the registry key path
     $registryPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
@@ -121,22 +115,224 @@ function CheckInternetConnection {
         $i++ 
     } while ($i -le $number)
 }
-CheckInternetConnection
 
-$global:CurrentDriverVersion = ""
+# Define path to the INI file
+$iniFilePath = "$env:Temp\OriginalDriverSettings.ini"
+
+# Helper function to save original settings
+function Export-OriginalSettings {
+    param (
+        [string]$RegistryPath,
+        [string]$ValueName
+    )
+
+    # Check if the registry value exists and export it if so
+    if (Get-ItemProperty -Path $RegistryPath -Name $ValueName -ErrorAction SilentlyContinue) {
+        $originalValue = (Get-ItemProperty -Path $RegistryPath -Name $ValueName).$ValueName
+        Add-Content -Path $iniFilePath -Value "$RegistryPath`|$ValueName=$originalValue"
+    } else {
+        Add-Content -Path $iniFilePath -Value "$RegistryPath`|$ValueName=$originalValue|Delete"
+    }
+}
+
+function DisableAutoDriverUpdate {
+    # Preventing windows from automatically installing nvidia driver
+
+    Write-Verbose "Saving original registry settings to $iniFilePath..." -Verbose
+
+    if (Test-Path -Path $iniFilePath -PathType Leaf) {
+        Remove-Item -Path "$iniFilePath" -Force
+    }
+
+    # List of registry keys and values to back up
+    $settingsToBackup = @(
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata"; Name = "PreventDeviceMetadataFromNetwork" },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching"; Name = "DontPromptForWindowsUpdate" },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching"; Name = "DontSearchWindowsUpdate" },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching"; Name = "DriverUpdateWizardWuSearchEnabled" },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching"; Name = "SearchOrderConfig" },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "ExcludeWUDriversInQualityUpdate" },
+        @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching"; Name = "SearchOrderConfig" }
+    )
+
+    #@{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost"; Name = "Default" }
+    #@{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost"; Name = "Ethernet" }
+    #@{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost"; Name = "WiFi" }
+
+    # Export current values to INI file
+    foreach ($setting in $settingsToBackup) {
+        Export-OriginalSettings -RegistryPath $setting.Path -ValueName $setting.Name
+    }
+
+    Write-Verbose "Disabling driver offering through Windows Update..." -Verbose
+
+    If (!(Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata")) {
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" -Force | Out-Null
+    }
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" -Name "PreventDeviceMetadataFromNetwork" -Type DWord -Value 1
+    If (!(Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching")) {
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching" -Force | Out-Null
+    }
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching" -Name "DontPromptForWindowsUpdate" -Type DWord -Value 1
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching" -Name "DontSearchWindowsUpdate" -Type DWord -Value 1
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching" -Name "DriverUpdateWizardWuSearchEnabled" -Type DWord -Value 0
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DriverSearching" -Name "SearchOrderConfig" -Type DWord -Value 0
+    If (!(Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate")) {
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" | Out-Null
+    }
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" -Name "ExcludeWUDriversInQualityUpdate" -Type DWord -Value 1
+
+    If (!(Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching")) {
+        New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" | Out-Null
+    }
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" -Name "SearchOrderConfig" -Type DWord -Value 0
+
+    # metered connection, cant edit with admin rights because owner is trustedinstaller
+    #If (!(Test-Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost")) {
+        #New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost" | Out-Null
+    #}
+    #Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost" -Name "Default" -Type DWord -Value 2
+    #Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost" -Name "Ethernet" -Type DWord -Value 2
+    #Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost" -Name "WiFi" -Type DWord -Value 2
+}
+
+function RestoreAutoDriverUpdate {
+    # To revert settings, load from the INI file and restore values
+    if (Test-Path -Path $iniFilePath -PathType Leaf) {
+        $settings = Get-Content -Path $iniFilePath
+        foreach ($setting in $settings) {
+            $parts = $setting -split "\|"
+            $registryPath = $parts[0]
+            $nameValue = $parts[1] -split "="
+            if ($parts[2] -match "Delete") {
+                $valueName = $nameValue[0]
+                Remove-ItemProperty $registryPath -Name $valueName -Force
+            } else {
+                $valueName = $nameValue[0]
+                $valueData = [int]$nameValue[1]
+                Set-ItemProperty -Path $registryPath -Name $valueName -Value $valueData -Force
+            }
+        }
+        Write-Verbose "Original settings restored from $iniFilePath." -Verbose
+        Remove-Item -Path "$iniFilePath" -Force
+    } else {
+        Write-Warning "INI file not found. Original settings cannot be restored."
+    }
+}
+
+
+function Download-GithubRelease {
+    param (
+        [string]$Repository,               # e.g., "Orbmu2k/nvidiaProfileInspector"
+        [string]$FilePattern,              # Pattern to match the release file
+        [string]$DestinationPath,          # Destination folder for the download
+        [string]$ExpectedHash = $null      # Optionally, you can pass a hash to verify the downloaded file
+    )
+
+    CheckInternetConnection
+
+    # Check and create destination path if it doesn't exist
+    if (-not (Test-Path $DestinationPath)) {
+        try {
+            New-Item -Path $DestinationPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Warning "Could not create path '$DestinationPath'. Exiting." -Verbose
+            return
+        }
+    }
+
+    # Get the release assets from GitHub
+    $releasesUri = "https://api.github.com/repos/$Repository/releases"
+    $assets = (Invoke-RestMethod -Method GET -Uri $releasesUri).assets
+
+    # Find the file that matches the pattern
+    $downloadUrl = $assets.browser_download_url
+
+    foreach ($url in $downloadUrl) {
+        if ($url -like "$FilePattern") {
+            $foundUrl = $url
+            break
+        }
+    }
+
+    if (-not $foundUrl) {
+        Write-Warning "File matching pattern '$FilePattern' not found in the latest release." -Verbose
+        return
+    }
+
+    # Define the download file path
+    $outFile = Split-Path -Leaf $foundUrl
+    $outPath = Join-Path -Path $DestinationPath -ChildPath $outFile
+
+    # Download the file
+    try {
+        Write-Verbose "Downloading file from $foundUrl..." -Verbose
+        (New-Object Net.WebClient).DownloadFile($foundUrl, $outPath)
+        Write-Verbose "Downloaded to $outPath" -Verbose
+
+        # If expected hash is provided, verify the downloaded file's hash
+        if ($ExpectedHash) {
+            try {
+                $actualHash = (Get-FileHash -Path $outPath -Algorithm SHA256).Hash
+                if ($actualHash -ne $ExpectedHash) {
+                    Write-Warning "Hash mismatch for '$outPath'. Expected: $ExpectedHash, Actual: $actualHash" -Verbose
+                    return
+                } else {
+                    Write-Verbose "Hash verification successful for '$outPath'" -Verbose
+                }
+            } catch {
+                Write-Warning "Hash verification failed for '$outPath': $_" -Verbose
+            }
+        }
+    } catch {
+        Write-Warning "Error downloading file: $_" -Verbose
+        return
+    }
+
+    # Check if the file is an archive and extract it
+    if ($outPath -imatch "\.(zip|rar|7z)$") {
+        try {
+            Write-Verbose "Extracting file: $outPath" -Verbose
+            if ($outPath -like "*.zip") {
+                Expand-Archive -Path $outPath -DestinationPath $DestinationPath -Force
+            }
+            #} elseif ($outPath -like "*.rar" -or $outPath -like "*.7z") {
+                # Requires 7-Zip to be installed on your system
+                #$sevenZipPath = "C:\Program Files\7-Zip\7z.exe"  # Adjust path to your 7z.exe
+                #& $sevenZipPath x $outPath -o$DestinationPath -y
+            #}
+            Write-Verbose "Extraction completed!" -Verbose
+        } catch {
+            Write-Warning "Error during extraction: $_" -Verbose
+        } finally {
+            Remove-Item $outPath -Force
+        }
+    } else {
+        Write-Verbose "Downloaded file is not an archive." -Verbose
+    }
+}
+
 function nvidiaCheckCurrentDriverVersion {
     # Check current driver version
     Write-Verbose "Attempt to detect the current driver version installed" -Verbose
     try {
-        [System.Version]$Driver = (Get-CimInstance -ClassName Win32_VideoController | Where-Object -FilterScript {$_.Name -match "NVIDIA"}).DriverVersion
-        $global:CurrentDriverVersion = ("{0}{1}" -f $Driver.Build, $Driver.Revision).Substring(1).Insert(3,'.')
-        Write-Verbose "Current version: $global:CurrentDriverVersion" -Verbose
+        [System.Version]$Driver = (Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Where-Object -FilterScript {$_.Name -match "NVIDIA"}).DriverVersion
+        # Construct the version string
+        $CurrentDriverVersion = ("{0}{1}" -f $Driver.Build, $Driver.Revision).Substring(1).Insert(3,'.')
+
+        # Check if the first digit after the dot is a 0 and remove it if so
+        if ($CurrentDriverVersion -match '\.(0\d)') {
+            $CurrentDriverVersion = $CurrentDriverVersion -replace '\.0(\d)', '.$1'
+        }
+
+        Write-Verbose "Current version: $CurrentDriverVersion" -Verbose
+        return $CurrentDriverVersion
     }
     catch {
         Write-Verbose "Unable to detect a compatible Nvidia device. Seems like its the first driver install or a clean install for you." -Verbose
+        return "first driver install or a clean install"
     }
 }
-nvidiaCheckCurrentDriverVersion
 
 function Download-File {
     param (
@@ -146,6 +342,8 @@ function Download-File {
         [Parameter(Mandatory = $true)]
         [string]$Destination
     )
+
+    CheckInternetConnection
 
     try {
         # Create a WebClient object
@@ -176,10 +374,6 @@ function Download-File {
             }
         }
 
-        # Close streams
-        $responseStream.Close()
-        $fileStream.Close()
-
         # Check if the file was downloaded successfully
         if (Test-Path -Path $Destination) {
             Write-Verbose "Download successful. Proceed..." -Verbose
@@ -201,7 +395,6 @@ function Download-File {
     }
 }
 
-$global:archiverProgram = ""
 function get7Zip {
     # Get the latest 7-Zip, if not already installed
     $7zipinstalled = $false
@@ -211,13 +404,15 @@ function get7Zip {
         $7ZipPath = (Get-ItemProperty -Path $7ZipPathKey -Name Path).Path
         $7ZipExe = Join-Path -Path $7ZipPath -ChildPath "7z.exe"
         
-        if (Test-Path $7ZipExe) {
-            $global:archiverProgram = $7ZipExe
+        if (Test-Path -Path $7ZipExe -PathType Leaf) {
             $7zipinstalled = $true
             Write-Verbose "7-Zip is already installed at $7ZipExe" -Verbose
+            return $7ZipExe
         }
     }
     if (($7zipinstalled) -eq $false) {
+        CheckInternetConnection
+
         Write-Verbose "Sorry, but it looks like you don't have a supported archiver. We will download 7-zip for you" -Verbose
 
         $UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -257,7 +452,7 @@ function get7Zip {
             Remove-Item -Path "$tempNvidiaFolder\7Zip.msi" -Force
 
             if (Test-Path -Path "$tempNvidiaFolder\7zip\Files\7-Zip\7z.exe" -PathType Leaf) {
-                $global:archiverProgram = "$tempNvidiaFolder\7zip\Files\7-Zip\7z.exe"
+                return "$tempNvidiaFolder\7zip\Files\7-Zip\7z.exe"
             } else {
                 cleanUp
                 Write-Warning "Please manually download and install 7-zip and restart the script" -Verbose
@@ -277,43 +472,7 @@ function get7Zip {
     }
 }
 
-# Temporary disable windows driver updates
-function DisableAutoDriverUpdate {
-    $networkKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\DefaultMediaCost"
-    $windowsUpdateKeyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
-
-    if (!(Test-Path $networkKeyPath -ErrorAction SilentlyContinue) -or 
-        !(Test-Path $windowsUpdateKeyPath -ErrorAction SilentlyContinue)) {
-        return
-    }
-
-    $val = Get-ItemProperty -Path $networkKeyPath -Name "Default", "Ethernet", "WiFi" -ErrorAction SilentlyContinue
-    $val1 = Get-ItemProperty -Path $windowsUpdateKeyPath -Name "NoAutoUpdate" -ErrorAction SilentlyContinue
-
-    if ($val.Default -eq 2 -and $val.Ethernet -eq 2 -and $val.WiFi -eq 2 -and $val1.NoAutoUpdate -eq 1) {
-        Write-Verbose "It seems that your network is already configured as metered and against automatic updates." -Verbose
-        New-Item 'HKLM:\Software\AlreadyMetered' -Force -ErrorAction SilentlyContinue
-    } else {
-        Write-Verbose "Temporary disable Windows Update driver offering" -Verbose
-        New-Item 'HKLM:\Software\TempDisableDriverUpdates' -Force -ErrorAction SilentlyContinue
-        Start-Process -FilePath "$PSScriptRoot\Temporary-Block-Automatic-Driver-Install\Disable hijackers.cmd" -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
-    }
-}
-
-# Enable offering of drivers through Windows Update
-function EnableAutoDriverUpdate {
-    if ((Test-Path "HKLM:\Software\AlreadyMetered")) {
-        Write-Verbose "No need to enable Windows Update driver offering as it was already disabled." -Verbose
-        Remove-Item -Path "HKLM:\Software\AlreadyMetered" -Force
-    } elseif ((Test-Path "HKLM:\Software\TempDisableDriverUpdates")) {
-        Remove-Item -Path "HKLM:\Software\TempDisableDriverUpdates" -Force
-        Write-Verbose "Enable driver availability through Windows Update" -Verbose
-        Start-Process -FilePath "$PSScriptRoot\Temporary-Block-Automatic-Driver-Install\Undo everything.cmd" -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
-    }
-}
-
-$global:nvidiaConfig = ""
-function IsLaptop {
+function NvidiaInstallConfig {
     # https://docs.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem
     # Mobile = 2
     $HardwareType = (Get-CimInstance -Class Win32_ComputerSystem -Property PCSystemType).PCSystemType
@@ -321,20 +480,23 @@ function IsLaptop {
         Write-Verbose "$Env:ComputerName is a Laptop" -Verbose
         # "nodejs" needed for gfexperience and rtx stuff, "PPC" needed for usb-c, "Display.Optimus" needed for notebooks
         if ($disableUsbC) {
-            $global:nvidiaConfig = "nodejs Display.Optimus Display.Driver NVI2 PhysX EULA.txt ListDevices.txt setup.cfg setup.exe"
+            $nvidiaConfig = "nodejs Display.Optimus Display.Driver NVI2 PhysX EULA.txt ListDevices.txt setup.cfg setup.exe"
+            return $nvidiaConfig
         } else {
-            $global:nvidiaConfig = "nodejs Display.Optimus Display.Driver NVI2 PhysX PPC EULA.txt ListDevices.txt setup.cfg setup.exe"
+            $nvidiaConfig = "nodejs Display.Optimus Display.Driver NVI2 PhysX PPC EULA.txt ListDevices.txt setup.cfg setup.exe"
+            return $nvidiaConfig
         }
     } else {
         Write-Verbose "$Env:ComputerName is a Desktop" -Verbose
         if ($disableUsbC) {
-            $global:nvidiaConfig = "nodejs Display.Driver NVI2 PhysX EULA.txt ListDevices.txt setup.cfg setup.exe"
+            $nvidiaConfig = "nodejs Display.Driver NVI2 PhysX EULA.txt ListDevices.txt setup.cfg setup.exe"
+            return $nvidiaConfig
         } else {
-            $global:nvidiaConfig = "nodejs Display.Driver NVI2 PhysX PPC EULA.txt ListDevices.txt setup.cfg setup.exe"
+            $nvidiaConfig = "nodejs Display.Driver NVI2 PhysX PPC EULA.txt ListDevices.txt setup.cfg setup.exe"
+            return $nvidiaConfig
         }
     }
 }
-IsLaptop
 
 function downloadAndInstallNvidiaControlPanel {
     # Check if winget is already installed
@@ -363,11 +525,11 @@ function downloadAndInstallNvidiaControlPanel {
                 lang = [System.Globalization.CultureInfo]::CurrentCulture.Name
             }
 
-            $raw = Invoke-RestMethod -Method Post -Uri $apiUrl -ContentType 'application/x-www-form-urlencoded' -Body $body
+            $raw = Invoke-RestMethod -Method Post -Uri $apiUrl -ContentType 'application/x-www-form-urlencoded' -Body $body -ErrorAction Stop
 
             $raw | Select-String '<tr style.*<a href=\"(?<url>.*)"\s.*>(?<text>.*)<\/a>' -AllMatches|
-            % { $_.Matches } |
-            % { 
+            ForEach-Object { $_.Matches } |
+            ForEach-Object { 
                 $url = $_.Groups[1].Value
                 $text = $_.Groups[2].Value
                 
@@ -390,18 +552,15 @@ function downloadAndInstallNvidiaControlPanel {
 function downloadNvidiaDriver {
     # Get the nvidia gpu device id
     try {
-        $gpuDeviceID = (Get-CimInstance -Query "SELECT DeviceID FROM Win32_PNPEntity WHERE DeviceID LIKE '%PCI\\VEN_10DE%' AND (PNPClass = 'Display' OR Name = '3D Video Controller')" |
-                        Select-Object -ExpandProperty DeviceID |
-                        ForEach-Object {
-                            if ($_ -match 'DEV_(\w{4}).*SUBSYS_(\w{8})') {
-                                $deviceIdPart1 = $Matches[1]
-                                return "$deviceIdPart1"
-                            } else {
-                                return ""
-                            }
-                        })
+        $gpuDeviceID = Get-CimInstance -Query "SELECT DeviceID FROM Win32_PNPEntity WHERE DeviceID LIKE '%PCI\\VEN_10DE%' AND (PNPClass = 'Display' OR Name = '3D Video Controller')" -ErrorAction Stop | Where-Object { $_.DeviceID -match 'DEV_(\w{4}).*SUBSYS_(\w{8})' } | Select-Object -First 1 -ExpandProperty DeviceID
 
-        if ($gpuDeviceID) {
+        # Extract the device ID part
+        if ($gpuDeviceID -match 'DEV_(\w{4}).*SUBSYS_(\w{8})') {
+            $deviceIdPart1 = $Matches[1]
+            $gpuDeviceID = $deviceIdPart1
+        }
+
+        if ($null -ne $gpuDeviceID) {
             Write-Verbose "GPU Device ID: $gpuDeviceID" -Verbose
         } else {
             cleanUp
@@ -436,6 +595,8 @@ function downloadNvidiaDriver {
 
         $osVersionBuild = [System.Environment]::OSVersion.Version.Build
 
+        CheckInternetConnection
+
         $Parameters = @{
         Uri = "https://gfwsl.geforce.com/nvidia_web_services/controller.gfeclientcontent.NG.php/com.nvidia.services.GFEClientContent_NG.getDispDrvrByDevid/%7B%22dIDa%22:%5B%22" + $gpuDeviceID +  "_0_0_0%22%5D,%22osC%22:%2210.0%22,%22osB%22:%22" + $osVersionBuild + "%22,%22is6%22:%221%22,%22lg%22:%221033%22,%22iLp%22:%220%22,%22prvMd%22:%220%22,%22gcV%22:%220%22,%22gIsB%22:%220%22,%22dch%22:%220%22,%22upCRD%22:%220%22,%22isCRD%22:%220%22%7D"
         UseBasicParsing = $true
@@ -445,7 +606,7 @@ function downloadNvidiaDriver {
         Method = "GET"
         DisableKeepAlive = $true
         }
-        $Data = Invoke-RestMethod @Parameters
+        $Data = Invoke-RestMethod @Parameters -ErrorAction Stop
     }
     catch [System.Net.WebException] {
         cleanUp
@@ -459,10 +620,12 @@ function downloadNvidiaDriver {
     if ($Data.DriverAttributes.Version) {
         [System.Version]$LatestVersion = $Data.DriverAttributes.Version
         Write-Verbose "Latest nvidia driver version is: $LatestVersion" -Verbose
-        if ($global:CurrentDriverVersion -eq $LatestVersion) {
+        $CurrentDriverVersion = nvidiaCheckCurrentDriverVersion
+        if ($CurrentDriverVersion -ne "first driver install or a clean install" -and $CurrentDriverVersion -eq $LatestVersion) {
+            Write-Host ""
             Write-Verbose "Seems like you already have the latest nvidia driver installed.`nDo you still want to continue?" -Verbose
             $confirmation = Read-Host "(Y/N) Default is no"
-            if ($confirmation -eq 'n') {
+            if ($confirmation -eq 'n' -or $confirmation -eq 'N') {
                 cleanUp
                 Write-Host "Bye Bye (-;"
                 Write-Host "Press any key to exit..."
@@ -470,6 +633,8 @@ function downloadNvidiaDriver {
                 exit
             }
         }
+
+        Write-Verbose "Downloading now the latest nvidia driver" -Verbose
 
         if ($Data.DriverAttributes.DownloadURLAdmin) {
             $DownloadURLAdmin = $Data.DriverAttributes.DownloadURLAdmin
@@ -502,10 +667,26 @@ if ($isNormalBoot) {
         if (-Not (Test-Path -Path $tempNvidiaFolder)) {
             New-Item -Path $tempNvidiaFolder -ItemType Directory -Force | Out-Null
         }
-        Write-Verbose "Downloading now the latest nvidia driver" -Verbose
         downloadNvidiaDriver
 
-        get7Zip
+        $7zipPath = get7Zip
+
+        if (-not(Test-Path -Path "$PSScriptRoot\DDU\*\Display Driver Uninstaller.exe" -PathType Leaf)) {
+            Write-Verbose "Downloading DDU Driver Uninstaller" -Verbose
+            Download-File -url "https://www.wagnardsoft.com/DDU/download/DDU%20v18.0.8.4.exe" -Destination "$env:Temp\DDU.exe"
+            if (Test-Path -Path "$env:Temp\DDU.exe" -PathType Leaf) {
+                & $7zipPath x "$env:Temp\DDU.exe" -o"$PSScriptRoot\DDU" -y
+                Remove-Item -Path "$env:Temp\DDU.exe" -Force
+            }
+        }
+
+        if ($enableNvidiaProfileInspector) {
+            if (-not(Test-Path -Path "$PSScriptRoot\nvidiaProfileInspector\nvidiaProfileInspector.exe" -PathType Leaf)) {
+                Download-GithubRelease -Repository "Orbmu2k/nvidiaProfileInspector" -FilePattern "*2.4.0.4*zip" -DestinationPath "$PSScriptRoot\nvidiaProfileInspector" -ExpectedHash "9DC8F944DC55C0ECA9BB939B1C756A093F8250B6D9DB76319BF27EF5FBE4CB83"
+            }
+        }
+
+        $nvidiaConfig = NvidiaInstallConfig
 
         # Extracting installer
         # Based on 7-zip.chm
@@ -524,12 +705,12 @@ if ($isNormalBoot) {
             # What to extract
             "$tempNvidiaFolder\nvidiaDriver.exe",
             # Extract these files and folders
-            $global:nvidiaConfig,
+            $nvidiaConfig,
             # Specifies a destination directory where files are to be extracted
             "-o`"$tempNvidiaFolder\NVidia`""
         )
         $Parameters = @{
-            FilePath     = "$global:archiverProgram"
+            FilePath     = "$7zipPath"
             ArgumentList = $Arguments
             NoNewWindow  = $true
             Wait         = $true
@@ -556,15 +737,16 @@ if ($isNormalBoot) {
             Write-Warning "Could not find the nvidia setup.cfg" -Verbose
         }
 
-        Write-Verbose "`We will restart your system in safe mode and clean your nvidia driver with DDU.`nDo you want to continue?" -Verbose
+        Write-Host ""
+        Write-Verbose "`We will restart now your system in safe mode and clean your nvidia driver with DDU.`nDo you want to continue?" -Verbose
         $confirmation = Read-Host "(Y/N) Default is no"
-        if ($confirmation -eq 'y') {
+        if ($confirmation -eq 'y' -or $confirmation -eq 'Y') {
             DisableAutoDriverUpdate
             # Create a runonce key in the registry to run the script automatically when you restart in safe mode.
             # By default, these keys are ignored when the computer is started in Safe Mode. The value name of RunOnce keys can be prefixed with an asterisk (*) to force the program to run even in Safe mode.
             New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "*RebootSafeMode*" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-            # Reboot to safe mode with networking
-            Start-Process "$env:SystemRoot\System32\cmd.exe"-ArgumentList '/s,/c,bcdedit /set {current} safeboot network & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
+            # Reboot to safe mode
+            Start-Process "$env:SystemRoot\System32\cmd.exe"-ArgumentList '/s,/c,bcdedit.exe /set {current} safeboot minimal & bcdedit.exe /deletevalue {current} safebootalternateshell & shutdown.exe -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
             exit
         }
         else {
@@ -581,13 +763,15 @@ if ($isFailSafeBoot) {
     Write-Verbose "We are in a safe boot environment" -Verbose
     # Driver uninstall with DDU, only if the system is in safe boot
     if ((-not (Test-Path 'HKLM:\Software\RebootDummyKey'))) {
-        Write-Verbose "DDU Driver Uninstaller now running" -Verbose
-        Start-Process -FilePath "$DDU" -ArgumentList {"-silent", "-cleannvidia", "-RemovePhysx", "-RemoveGFE", "-RemoveNVBROADCAST", "-RemoveNVCP"} -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        Write-Verbose "DDU Driver Uninstaller is now running, please wait..." -Verbose
+        Start-Sleep -Seconds 3
+        Start-Process -FilePath "$PSScriptRoot\DDU\*\Display Driver Uninstaller.exe" -ArgumentList {"-silent", "-cleannvidia", "-RemovePhysx", "-RemoveGFE", "-RemoveNVBROADCAST", "-RemoveNVCP", "-NoRestorePoint"} -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
         # Create a dummy registry key needed to continue the script after a reboot.
         New-Item 'HKLM:\Software\RebootDummyKey' -Force
         # Create a runonce key in the registry to run the script automatically after rebooting to normal boot.
         New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" -Force -Name "RebootNormalMode" -PropertyType "String" -Value "`"$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
         # Reboot to normal mode
+        Start-Sleep -Seconds 3
         Start-Process "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/s,/c,bcdedit /deletevalue {current} safeboot & bcdedit /deletevalue {current} safebootalternateshell & shutdown -r -t 00 -f' -Verb "RunAs" -WindowStyle Hidden -ErrorAction SilentlyContinue
         exit
     }
@@ -600,7 +784,8 @@ if ($isNormalBoot) {
         Remove-Item -Path "HKLM:\Software\RebootDummyKey" -Force
 
         # Installing drivers
-        Write-Verbose "Installing the nvidia driver" -Verbose
+        Write-Verbose "Installing now the cleaned nvidia driver..." -Verbose
+        Start-Sleep -Seconds 3
         $Arguments = @("-passive", "-noreboot", "-noeula", "-nofinish", "-clean", "-enableTelemetry:false", "-gfexperienceinitiated:false")
         Start-Process -FilePath "$tempNvidiaFolder\NVidia\setup.exe" -ArgumentList $Arguments -Wait
 
@@ -641,9 +826,14 @@ if ($isNormalBoot) {
 
         if ($disableUsbC) {
             # Disabling usb-c
-            # name in devmanview @System32\drivers\usbxhci.sys,#1073807361;%1 USB %2 eXtensible-Hostcontroller – %3 (Microsoft);(NVIDIA,3.10,1.10)
             Write-Verbose "Disabling USB-C" -Verbose
-            Start-Process -FilePath "$DevManView" -ArgumentList {/disable "*(Microsoft);(NVIDIA,3.10,1.10)" "/use_wildcard"} -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+            # Define the friendly name of the device you want to disable
+            $friendlyName = "NVIDIA USB 3.10 eXtensible-Hostcontroller – 1.10 (Microsoft)"
+
+            # Retrieve the device and disable it
+            Get-PnpDevice | Where-Object { $_.FriendlyName -eq $friendlyName } | ForEach-Object {
+                Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false
+            }
         }
 
         if ($enableNvidiaProfileInspector) {
@@ -654,7 +844,7 @@ if ($isNormalBoot) {
             $escapedPath = "`"$NvidiaProfileInspectorProfile`""
             # Combine the escaped path and other arguments into the ArgumentList array
             $argumentList = "$escapedPath $argument"
-            Start-Process -FilePath "$NvidiaProfileInspector" -ArgumentList $argumentList -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+            Start-Process -FilePath "$PSScriptRoot\nvidiaProfileInspector\nvidiaProfileInspector.exe" -ArgumentList $argumentList -Verb "RunAs" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
         }
         
         # Clean up
@@ -668,6 +858,7 @@ if ($isNormalBoot) {
         }
             
         # Driver installed, requesting a reboot
+        Write-Host ""
         Write-Verbose "Driver installed. You may need to reboot to finish installation." -Verbose
         Write-Verbose "Would you like to reboot now?" -Verbose
         $Readhost = Read-Host "(Y/N) Default is no"
